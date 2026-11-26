@@ -1,8 +1,5 @@
-from dataclasses import asdict
-
-from edition.editions import EditionStore
+from edition.editions import EditionStore, edition_snapshot
 
 
 def read_edition(db, edition_id):
-    edition = EditionStore(db).get(edition_id)
-    return asdict(edition)
+    return edition_snapshot(EditionStore(db).get(edition_id))

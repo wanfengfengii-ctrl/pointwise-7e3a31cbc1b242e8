@@ -114,6 +114,11 @@ class WorkshopRig:
         return self.request('POST', '/editions', {'proof_id': proof_id, 'target': target},
                             expected=status)
 
+    def publish_sample(self, proof_id, sample_paper_id, target=1, *, status=200):
+        return self.request('POST', '/editions',
+                            {'proof_id': proof_id, 'target': target,
+                             'sample_paper_id': sample_paper_id}, expected=status)
+
     def edition(self, edition, *, status=200):
         return self.request('GET', f'/editions/{edition}', expected=status)
 

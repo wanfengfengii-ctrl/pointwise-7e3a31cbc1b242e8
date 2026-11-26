@@ -3,7 +3,7 @@ import json
 import logging
 import sqlite3
 from contextlib import closing
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -15,10 +15,22 @@ from edition.editions import EditionStore, UnknownEdition
 from edition.publication import UnknownProof, publish_edition
 from edition.readback import read_edition
 from press.device import DeviceNoReply, DeviceRefusal, PressDevice
+from press.errors import (
+    EditionNotReleased,
+    PaperConflict,
+    ReleaseConflict,
+    RequestConflict,
+    SamplePaperReserved,
+    TrialNotAllowed,
+    UnknownPhysicalPaper,
+    UnknownTrial,
+)
 from press.mechanics import MechanicalPress
-from press.production import RequestConflict, print_card
+from press.outcomes import Pending
+from press.production import print_card
 from press.receipts import ReceiptStore, UnknownReceipt, read_receipt
 from press.stock import WrongSheet
+from press.trials import ReleaseStore, TrialStore, read_trial, release_edition, submit_trial
 from proof.bounds import OutsidePrintableArea
 from proof.sheets import ProofStore, UnknownRevision, build_preview
 from record.lookup import edition_report
@@ -46,6 +58,13 @@ ERROR_RESPONSES = {
     UnknownEdition: (404, 'unknown_edition'),
     UnknownReceipt: (404, 'unknown_receipt'),
     UnknownRoute: (404, 'unknown_route'),
+    UnknownPhysicalPaper: (404, 'unknown_paper'),
+    UnknownTrial: (404, 'unknown_trial'),
+    PaperConflict: (409, 'paper_conflict'),
+    ReleaseConflict: (409, 'release_conflict'),
+    TrialNotAllowed: (409, 'trial_not_allowed'),
+    EditionNotReleased: (409, 'edition_not_released'),
+    SamplePaperReserved: (409, 'sample_paper_reserved'),
     WrongSheet: (409, 'wrong_sheet'),
     RequestConflict: (409, 'request_conflict'),
     DeviceRefusal: (503, 'device_refusal'),
@@ -79,7 +98,15 @@ def _identifier(value, name):
 def _edition_number(segment):
     if not segment.isascii() or not segment.isdecimal():
         raise UnknownEdition('edition not found')
-    return segment.lstrip('0') or '0'
+    return int(segment)
+
+
+def _payload(value):
+    if isinstance(value, Pending):
+        return value.payload
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    return value
 
 
 class WorkshopHandler(BaseHTTPRequestHandler):
@@ -107,7 +134,7 @@ class WorkshopHandler(BaseHTTPRequestHandler):
             status, code = ERROR_RESPONSES[type(exc)]
             self._send_json(status, {'error': code, 'message': str(exc)})
         else:
-            self._send_json(200, data)
+            self._send_json(202 if isinstance(data, Pending) else 200, _payload(data))
 
     def _path_parts(self):
         try:
@@ -145,6 +172,8 @@ class WorkshopHandler(BaseHTTPRequestHandler):
                 return asdict(edition_report(db, _edition_number(edition)))
             case ['receipts', request_id]:
                 return asdict(read_receipt(db, _identifier(request_id, 'request_id')))
+            case ['proofs', request_id]:
+                return read_trial(db, _identifier(request_id, 'request_id'))
             case _:
                 raise UnknownRoute('endpoint not found')
 
@@ -162,16 +191,30 @@ class WorkshopHandler(BaseHTTPRequestHandler):
             case ['editions']:
                 body = self._read_json()
                 proof_id = _positive_int(body.get('proof_id'), 'proof_id')
-                result = publish_edition(db, proof_id, body.get('target'))
+                sample = body.get('sample_paper_id')
+                if sample is not None:
+                    sample = _identifier(sample, 'sample_paper_id')
+                result = publish_edition(db, proof_id, body.get('target'), sample,
+                                         self.server.device.mechanics)
+            case ['editions', edition, 'release']:
+                body = self._read_json()
+                request_id = _identifier(body.get('request_id'), 'request_id')
+                result = release_edition(db, _edition_number(edition), request_id)
             case ['impressions']:
                 body = self._read_json()
                 request_id = _identifier(body.get('request_id'), 'request_id')
                 edition = _positive_int(body.get('edition_id'), 'edition_id')
                 paper_id = _identifier(body.get('paper_id'), 'paper_id')
                 result = print_card(db, self.server.device, request_id, edition, paper_id)
+            case ['proofs']:
+                body = self._read_json()
+                request_id = _identifier(body.get('request_id'), 'request_id')
+                edition = _positive_int(body.get('edition_id'), 'edition_id')
+                paper_id = _identifier(body.get('paper_id'), 'paper_id')
+                result = submit_trial(db, self.server.device, request_id, edition, paper_id)
             case _:
                 raise UnknownRoute('endpoint not found')
-        return asdict(result)
+        return result
 
 
 class WorkshopServer(ThreadingHTTPServer):
@@ -196,6 +239,8 @@ def serve_workshop(business_path, device_path, seed, *, port=0):
             EditionStore.install(db)
             TargetStore.install(db)
             ReceiptStore.install(db)
+            TrialStore.install(db)
+            ReleaseStore.install(db)
     stock = seed['device']
     mechanics = MechanicalPress(device_path, stock['papers'], stock['loaded'])
     return WorkshopServer(business_path, PressDevice(mechanics), port)

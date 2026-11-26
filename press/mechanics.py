@@ -136,6 +136,13 @@ class MechanicalPress:
             _require_paper(db, paper_id)
             db.execute('UPDATE mechanical_state SET next_loaded = ? WHERE slot = 1', (paper_id,))
 
+    def knows_paper(self, paper_id):
+        with closing(self._connect()) as db:
+            db.execute('BEGIN')
+            return db.execute(
+                'SELECT 1 FROM physical_papers WHERE paper_id = ?', (paper_id,)
+            ).fetchone() is not None
+
     def observe_paper(self, paper_id):
         with closing(self._connect()) as db, db:
             db.execute('BEGIN')

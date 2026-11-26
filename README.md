@@ -9,7 +9,10 @@
 ```sh
 python3 -B check_project.py
 python3 -B -m tests.demo
+python3 -B -m tests.trial_demo
 ```
+
+`check_project.py` 运行完整回归；`tests.demo` 是普通制卡演练，`tests.trial_demo` 是试压续办与放行演练（含压前、压后失答及别纸竞争），`tests.trial_fixture` 是既有制卡对照，无新增请求。`python3 -B run_demo.py` 依次跑回归与这三个演练，任一失败即非零退出；运行清单的 `verify`/`demo` 分别指向 `check_project.py` 与 `run_demo.py`。
 
 回归入口由控制台随项目提供。示例在自己的临时目录内使用两份 SQLite 文件和一个环回端口，完成后释放它们。单独启动持久服务时可以指定项目内的数据文件。
 
@@ -27,13 +30,18 @@ python3 -B -m record.operator_http --business workshop.sqlite --device press.sql
 | --- | --- | --- |
 | `POST /manuscripts/hall/edit` | `{"expected_revision":1,"cells":["U","V"],"paper":{"width":9,"left":1,"right":2,"direction":"reverse"}}` | `manuscript_id`、新 `revision`、`cells` 和 `paper` |
 | `POST /previews` | `{"manuscript_id":"hall","revision":2}` | `proof_id`、稿修订、纸规、排序后的 `points`、逐出现 `occurrences` |
-| `POST /editions` | `{"proof_id":1,"target":2}` | `edition_id`、原校样和稿修订、冻结 `paper` 和 `points` |
+| `POST /editions` | `{"proof_id":1,"target":2}`，可加 `"sample_paper_id":"A"` 指定试样 | `edition_id`、原校样和稿修订、冻结 `paper` 和 `points`，格式与原响应一致 |
 | `GET /editions/1` | 版号 | 与冻结时相同的版次快照 |
 | `POST /impressions` | `{"request_id":"make-B","edition_id":1,"paper_id":"B"}` | 含请求号、版号、实际纸号、`press_no`、稿修订和校样号的首执 |
 | `GET /receipts/make-B` | 请求号 | 原确认首执 |
+| `POST /proofs` | `{"request_id":"trial-A","edition_id":1,"paper_id":"A"}` | 试压实压首执；待核时 202 含 `request_id` 与 `"status":"pending"` |
+| `GET /proofs/trial-A` | 试压请求号 | 原试压首执；待核时 202；未知 404 |
+| `POST /editions/1/release` | `{"request_id":"trial-A"}` | `edition_id` 与核对过的试压首执 |
 | `GET /editions/1/report` | 版号 | `target`、`completed`、`shortfall` 与按压次排列的 `pieces` |
 
 编辑提交的预期修订过期时返回 `409 stale_revision`，含 `current_revision`。缺项、未知稿号和非法规格返回 422。预览可使用任一已保存修订，未知修订返回 404。越界返回 `422 outside_printable_area` 和 `violations`，每项包含 `cell_id`、`occurrence`、`point`，此次请求无校样号。未知校样或版号返回 404，非法目标返回 422。制卡的纸号与实装纸不符返回 `409 wrong_sheet`，已确认请求号改版或改纸返回 `409 request_conflict`。设备明确拒绝返回 `503 device_refusal`，回包丢失返回 `503 device_no_reply`。只有设备成功回包才登记普通制卡首执。压前与压后失答的原号查询都返回 404，压后原纸可能已有凸点。无确认首执的失答请求重投可能叠压。
+
+试样相关错误：未知纸 404 `unknown_paper`，已压或已被指定的试样纸 409 `paper_conflict`，证据暂不可读时发行与试压均返回 202；普通版试压、纸号与指定试样不符 409 `trial_not_allowed`；试压原号改版或改纸、同版另号 409 `request_conflict`；试压版未放行制卡 409 `edition_not_released`，指定试样纸作正式件 409 `sample_paper_reserved`；未知试压原号 404 `unknown_trial`，普通版或他版试压号放行 409 `release_conflict`。试压与放行的细则见 TRIAL.md。
 
 ## 一天的样例
 
