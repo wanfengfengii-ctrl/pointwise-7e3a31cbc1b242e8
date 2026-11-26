@@ -1,0 +1,15 @@
+{
+  "patterns": {
+    "U": [[0, 0], [1, 2]],
+    "V": [[0, 1], [1, 0]]
+  },
+  "manuscript": {
+    "manuscript_id": "hall",
+    "cells": ["U", "V"],
+    "paper": {"width": 9, "left": 1, "right": 2, "direction": "forward"}
+  },
+  "device": {
+    "papers": ["A", "B", "C"],
+    "loaded": "B"
+  }
+}
